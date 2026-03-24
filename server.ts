@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import path from "path";
 import helmet from "helmet";
 import cors from "cors";
-import { engine } from "./engine.js";
+import { engine } from "./engine.ts";
 
 const app = express();
 const PORT = 3000;
@@ -27,6 +27,20 @@ function broadcast(data: Record<string, any>) {
 engine.onSpike = (spike) => {
   broadcast(spike);
 };
+
+engine.onReady = () => {
+  broadcast({
+    type: "init",
+    markets: Array.from(engine.marketMap.values()),
+  });
+};
+
+setInterval(() => {
+  broadcast({
+    type: "stats",
+    tradeCount: engine.tradeCount,
+  });
+}, 5000);
 
 // --- API Routes ---
 app.get("/health", (req, res) => {

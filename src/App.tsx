@@ -18,6 +18,7 @@ export default function App() {
   const [spikes, setSpikes] = useState<Spike[]>([]);
   const [markets, setMarkets] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
+  const [tradeCount, setTradeCount] = useState(0);
 
   useEffect(() => {
     const eventSource = new EventSource('/api/stream');
@@ -29,6 +30,8 @@ export default function App() {
       const data = JSON.parse(event.data);
       if (data.type === 'init') {
         setMarkets(data.markets);
+      } else if (data.type === 'stats') {
+        setTradeCount(data.tradeCount);
       } else if (data.type === 'spike') {
         setSpikes((prev: Spike[]) => [data, ...prev].slice(0, 50)); // Keep last 50
       }
@@ -53,6 +56,11 @@ export default function App() {
             <Radio className={`w-4 h-4 ${connected ? 'text-emerald-500 animate-pulse' : 'text-red-500'}`} />
             <span className="text-sm font-medium">
               {connected ? 'CLOB Stream Active' : 'Disconnected'}
+            </span>
+            <div className="h-4 w-px bg-zinc-800 mx-2"></div>
+            <Activity className="w-4 h-4 text-zinc-400" />
+            <span className="text-sm text-zinc-400">
+              {tradeCount.toLocaleString()} trades analyzed
             </span>
           </div>
         </header>

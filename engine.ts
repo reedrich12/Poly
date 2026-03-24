@@ -16,12 +16,14 @@ export const MIN_DATA_POINTS = 10;
 export class VolatilityEngine {
   marketMap = new Map<string, string>();
   priceHistory = new Map<string, number[]>();
+  tradeCount = 0;
   ws: WebSocket | null = null;
   pingInterval: NodeJS.Timeout | null = null;
   reconnectDelay = 5000;
   
   // Expose a callback for broadcasting spikes
   onSpike: ((spike: any) => void) | null = null;
+  onReady: (() => void) | null = null;
 
   async discoverMarkets() {
     console.log(
@@ -83,6 +85,7 @@ export class VolatilityEngine {
   }
 
   analyzeTrade(assetId: string, price: number) {
+    this.tradeCount++;
     if (isNaN(price)) return;
     if (!this.priceHistory.has(assetId)) return;
 
@@ -95,7 +98,7 @@ export class VolatilityEngine {
         history.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / history.length;
       const stdDev = Math.sqrt(variance);
 
-      if (stdDev > 0) {
+      if (stdDev > 0.001) {
         const zScore = (price - mean) / stdDev;
         if (Math.abs(zScore) >= Z_SCORE_THRESHOLD) {
           const spike = {
@@ -152,11 +155,25 @@ export class VolatilityEngine {
     this.ws.on("message", (data: WebSocket.Data) => {
       try {
         const message = JSON.parse(data.toString());
+        
+        // Handle array of events (e.g., initial book)
         if (Array.isArray(message)) {
           for (const event of message) {
-            if (event.event_type === "price_change") {
-              const assetId = event.asset_id;
-              const newPrice = parseFloat(event.price);
+            if (event.event_type === "price_change" && Array.isArray(event.price_changes)) {
+              for (const pc of event.price_changes) {
+                const assetId = pc.asset_id;
+                const newPrice = parseFloat(pc.price);
+                this.analyzeTrade(assetId, newPrice);
+              }
+            }
+          }
+        } 
+        // Handle single event object (e.g., live price_change)
+        else if (message && typeof message === 'object') {
+          if (message.event_type === "price_change" && Array.isArray(message.price_changes)) {
+            for (const pc of message.price_changes) {
+              const assetId = pc.asset_id;
+              const newPrice = parseFloat(pc.price);
               this.analyzeTrade(assetId, newPrice);
             }
           }
@@ -185,6 +202,9 @@ export class VolatilityEngine {
     if (targetAssets.length === 0) {
       console.log("Exiting: No matching markets found or API limit reached.");
       return;
+    }
+    if (this.onReady) {
+      this.onReady();
     }
     this.streamClob(targetAssets);
   }

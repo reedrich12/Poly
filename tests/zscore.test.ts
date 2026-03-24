@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { VolatilityEngine, MIN_DATA_POINTS, ROLLING_WINDOW_SIZE, Z_SCORE_THRESHOLD } from '../engine.js';
+import { VolatilityEngine, MIN_DATA_POINTS, ROLLING_WINDOW_SIZE, Z_SCORE_THRESHOLD } from '../engine.ts';
 
 describe('VolatilityEngine Z-Score Math', () => {
   it('stdDev=0 returns no spike', () => {
