@@ -1,0 +1,5 @@
+{
+  "name": "Polymarket Volatility Engine",
+  "description": "A real-time anomaly detection engine that monitors Polymarket's Central Limit Order Book via WebSocket and flags statistical volatility spikes.",
+  "requestFramePermissions": []
+}
