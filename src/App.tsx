@@ -30,7 +30,7 @@ export default function App() {
       if (data.type === 'init') {
         setMarkets(data.markets);
       } else if (data.type === 'spike') {
-        setSpikes(prev => [data, ...prev].slice(0, 50)); // Keep last 50
+        setSpikes((prev: Spike[]) => [data, ...prev].slice(0, 50)); // Keep last 50
       }
     };
 
@@ -74,7 +74,7 @@ export default function App() {
                 </div>
               ) : (
                 <div className="divide-y divide-zinc-800">
-                  {spikes.map((spike, i) => (
+                  {spikes.map((spike: Spike, i: number) => (
                     <div key={i} className="p-4 hover:bg-zinc-800/50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="space-y-1">
                         <div className="font-medium text-white">{spike.marketName}</div>
@@ -132,7 +132,7 @@ export default function App() {
                 {markets.length === 0 ? (
                   <p className="text-sm text-zinc-500">Discovering markets...</p>
                 ) : (
-                  markets.map((m, i) => (
+                  markets.map((m: string, i: number) => (
                     <div key={i} className="text-sm text-zinc-300 truncate py-1 border-b border-zinc-800/50 last:border-0" title={m}>
                       {m}
                     </div>

@@ -1,20 +1,39 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Polymarket Volatility Engine
 
-# Run and deploy your AI Studio app
+Real-time anomaly detection system that monitors Polymarket's Central Limit Order Book (CLOB) via WebSocket and flags statistical volatility spikes using Z-score analysis against a rolling price window. It features a dual implementation: a TypeScript/React full-stack web app and a Python standalone CLI.
 
-This contains everything you need to run your app locally.
+## Architecture
 
-View your app in AI Studio: https://ai.studio/apps/0776cf83-232e-4665-8266-d8477c178617
+```
++----------------+      +------------------+      +-------------------+      +-----------------+
+| Polymarket API | ---> | Market Discovery | ---> | WebSocket Stream  | ---> | Z-Score Engine  |
+| (Gamma REST)   |      | (Pagination)     |      | (CLOB price data) |      | (Rolling Window)|
++----------------+      +------------------+      +-------------------+      +-----------------+
+                                                                                      |
+                                                                                      v
+                                                                             +-----------------+
+                                                                             | React Frontend  |
+                                                                             | (SSE Broadcast) |
+                                                                             +-----------------+
+```
 
-## Run Locally
+## Setup Instructions
 
-**Prerequisites:**  Node.js
+### TypeScript / React (Full-Stack)
+1. Install dependencies: `npm install`
+2. Create `.env` from `.env.example` and add your `GEMINI_API_KEY` and `APP_URL` if needed.
+3. Run development server: `npm run dev`
+4. Build for production: `npm run build`
+5. Run production server: `NODE_ENV=production tsx server.ts`
 
+### Python (Standalone CLI)
+1. Install dependencies: `pip install -r requirements.txt`
+2. Run the tracker: `python tracker.py`
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Environment Variables
+- `GEMINI_API_KEY`: Required for Gemini AI API calls (if applicable).
+- `APP_URL`: The URL where this applet is hosted.
+
+## Polymarket API References
+- **Gamma REST API:** `https://gamma-api.polymarket.com/events?tag_slug={slug}&active=true&closed=false&limit={limit}&offset={offset}`
+- **CLOB WebSocket:** `wss://ws-subscriptions-clob.polymarket.com/ws/market`
