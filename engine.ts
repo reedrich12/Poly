@@ -16,9 +16,12 @@ export const MIN_DATA_POINTS = 10;
 export class VolatilityEngine {
   marketMap = new Map<string, string>();
   priceHistory = new Map<string, number[]>();
+  deltaHistory = new Map<string, number[]>();
+  lastPrice = new Map<string, number>();
   tradeCount = 0;
   ws: WebSocket | null = null;
   pingInterval: NodeJS.Timeout | null = null;
+  pongTimeout: NodeJS.Timeout | null = null;
   reconnectDelay = 5000;
   
   // Expose a callback for broadcasting spikes
@@ -31,6 +34,7 @@ export class VolatilityEngine {
     );
     
     const assetIds: string[] = [];
+    const assetIdSet = new Set<string>();
 
     for (const slug of TARGET_SLUGS) {
       let offset = 0;
@@ -59,10 +63,14 @@ export class VolatilityEngine {
               }
               if (tokens.length > 0) {
                 const assetId = tokens[0];
-                const marketName = `${event.title} - ${market.groupItemTitle || "Yes"}`;
-                this.marketMap.set(assetId, marketName);
-                this.priceHistory.set(assetId, []);
-                assetIds.push(assetId);
+                if (!assetIdSet.has(assetId)) {
+                  assetIdSet.add(assetId);
+                  const marketName = `${event.title} - ${market.groupItemTitle || "Yes"}`;
+                  this.marketMap.set(assetId, marketName);
+                  this.priceHistory.set(assetId, []);
+                  this.deltaHistory.set(assetId, []);
+                  assetIds.push(assetId);
+                }
               }
             }
           }
@@ -86,33 +94,43 @@ export class VolatilityEngine {
 
   analyzeTrade(assetId: string, price: number) {
     this.tradeCount++;
-    if (isNaN(price)) return;
-    if (!this.priceHistory.has(assetId)) return;
+    if (isNaN(price) || price < 0 || price > 1) return;
+    if (!this.marketMap.has(assetId)) return;
 
-    const history = this.priceHistory.get(assetId)!;
-    const marketName = this.marketMap.get(assetId)!;
+    const last = this.lastPrice.get(assetId);
+    this.lastPrice.set(assetId, price);
 
-    if (history.length >= MIN_DATA_POINTS) {
-      const mean = history.reduce((a, b) => a + b, 0) / history.length;
+    if (last === undefined) return;
+
+    const delta = price - last;
+    const deltas = this.deltaHistory.get(assetId)!;
+
+    if (deltas.length >= MIN_DATA_POINTS) {
+      const mean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
       const variance =
-        history.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / history.length;
+        deltas.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / deltas.length;
       const stdDev = Math.sqrt(variance);
 
-      if (stdDev > 0.001) {
-        const zScore = (price - mean) / stdDev;
+      if (stdDev > 1e-8) {
+        const zScore = (delta - mean) / stdDev;
         if (Math.abs(zScore) >= Z_SCORE_THRESHOLD) {
           const spike = {
             type: "spike",
-            marketName,
-            time: new Date().toISOString(),
-            oldPrice: mean,
-            newPrice: price,
+            marketName: this.marketMap.get(assetId)!,
+            assetId,
+            timestamp: new Date().toISOString(),
+            previousPrice: last,
+            currentPrice: price,
+            priceDelta: delta,
+            rollingMeanDelta: mean,
+            rollingStdDelta: stdDev,
             zScore,
+            windowSize: deltas.length,
           };
           console.log(
-            `🚨 VOLATILITY SPIKE: ${marketName} | ${mean.toFixed(
+            `🚨 VOLATILITY SPIKE: ${spike.marketName} | ${last.toFixed(
               3
-            )} -> ${price.toFixed(3)} | Z: ${zScore.toFixed(2)}`
+            )} -> ${price.toFixed(3)} | Δ: ${delta.toFixed(3)} | Z: ${zScore.toFixed(2)}`
           );
           if (this.onSpike) {
             this.onSpike(spike);
@@ -121,9 +139,9 @@ export class VolatilityEngine {
       }
     }
 
-    history.push(price);
-    if (history.length > ROLLING_WINDOW_SIZE) {
-      history.shift();
+    deltas.push(delta);
+    if (deltas.length > ROLLING_WINDOW_SIZE) {
+      deltas.shift();
     }
   }
 
@@ -147,44 +165,46 @@ export class VolatilityEngine {
       
       this.pingInterval = setInterval(() => {
         if (this.ws?.readyState === WebSocket.OPEN) {
-          this.ws.ping();
+          this.ws.send('PING');
+          this.pongTimeout = setTimeout(() => {
+            console.log("Missed PONG, reconnecting...");
+            this.ws?.terminate();
+          }, 30000);
         }
-      }, 20000);
+      }, 10000);
     });
 
     this.ws.on("message", (data: WebSocket.Data) => {
       try {
-        const message = JSON.parse(data.toString());
+        const msg = data.toString();
+        if (msg === 'PONG') {
+          if (this.pongTimeout) clearTimeout(this.pongTimeout);
+          return;
+        }
+        const message = JSON.parse(msg);
         
         // Handle array of events (e.g., initial book)
         if (Array.isArray(message)) {
           for (const event of message) {
-            if (event.event_type === "price_change" && Array.isArray(event.price_changes)) {
-              for (const pc of event.price_changes) {
-                const assetId = pc.asset_id;
-                const newPrice = parseFloat(pc.price);
-                this.analyzeTrade(assetId, newPrice);
-              }
+            if (event.event_type === "last_trade_price") {
+              this.analyzeTrade(event.asset_id, parseFloat(event.price));
             }
           }
         } 
         // Handle single event object (e.g., live price_change)
         else if (message && typeof message === 'object') {
-          if (message.event_type === "price_change" && Array.isArray(message.price_changes)) {
-            for (const pc of message.price_changes) {
-              const assetId = pc.asset_id;
-              const newPrice = parseFloat(pc.price);
-              this.analyzeTrade(assetId, newPrice);
-            }
+          if (message.event_type === "last_trade_price") {
+            this.analyzeTrade(message.asset_id, parseFloat(message.price));
           }
         }
       } catch (e: any) {
-        console.warn('Malformed WS message:', e.message);
+        // ignore
       }
     });
 
     this.ws.on("close", () => {
       if (this.pingInterval) clearInterval(this.pingInterval);
+      if (this.pongTimeout) clearTimeout(this.pongTimeout);
       console.log(
         `🔴 WebSocket connection dropped. Attempting to reconnect in ${this.reconnectDelay / 1000}s...`
       );

@@ -8,9 +8,11 @@ import { Activity, AlertTriangle, TrendingUp, Clock, Server, Radio } from 'lucid
 
 interface Spike {
   marketName: string;
-  time: string;
-  oldPrice: number;
-  newPrice: number;
+  timestamp: string;
+  previousPrice: number;
+  currentPrice: number;
+  priceDelta: number;
+  rollingMeanDelta: number;
   zScore: number;
 }
 
@@ -21,7 +23,7 @@ export default function App() {
   const [tradeCount, setTradeCount] = useState(0);
 
   useEffect(() => {
-    const eventSource = new EventSource('/api/stream');
+    const eventSource = new EventSource('/api/stream?key=default-key');
     
     eventSource.onopen = () => setConnected(true);
     eventSource.onerror = () => setConnected(false);
@@ -89,7 +91,7 @@ export default function App() {
                         <div className="flex items-center gap-4 text-sm text-zinc-400">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {new Date(spike.time).toLocaleTimeString()}
+                            {new Date(spike.timestamp).toLocaleTimeString()}
                           </span>
                           <span className="flex items-center gap-1 text-emerald-400">
                             <TrendingUp className="w-3 h-3" />
@@ -98,9 +100,12 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3 bg-zinc-950 px-4 py-2 rounded-lg border border-zinc-800 shrink-0">
-                        <span className="text-zinc-400">{spike.oldPrice.toFixed(3)}¢</span>
+                        <span className="text-zinc-400">{spike.previousPrice.toFixed(3)}¢</span>
                         <span className="text-zinc-600">➔</span>
-                        <span className="text-white font-mono">{spike.newPrice.toFixed(3)}¢</span>
+                        <span className="text-white font-mono">{spike.currentPrice.toFixed(3)}¢</span>
+                        <span className={`text-xs ml-2 ${spike.priceDelta >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                          {spike.priceDelta > 0 ? '+' : ''}{spike.priceDelta.toFixed(3)}
+                        </span>
                       </div>
                     </div>
                   ))}
