@@ -1,5 +1,33 @@
 import WebSocket from "ws";
 
+// ── Polymarket API type definitions ──────────────────────────────────────────
+
+/** Single market inside a Gamma API event object */
+interface GammaMarket {
+  groupItemTitle?: string;
+  clobTokenIds?: string; // JSON-encoded string array, e.g. '["123456"]'
+}
+
+/** Event object returned by https://gamma-api.polymarket.com/events */
+interface GammaEvent {
+  title: string;
+  markets?: GammaMarket[];
+}
+
+/** Live trade message from the CLOB WebSocket (event_type: last_trade_price) */
+interface ClobTradeMessage {
+  asset_id: string;
+  event_type: string;
+  price: string; // NOTE: string, not number — must parseFloat before use
+  side: 'BUY' | 'SELL';
+  size: string;
+  timestamp: string;
+  fee_rate_bps: string;
+  market: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const TARGET_SLUGS = [
   "iran",
   "geopolitics",
@@ -12,6 +40,25 @@ export const TARGET_SLUGS = [
 export const ROLLING_WINDOW_SIZE = 100;
 export const Z_SCORE_THRESHOLD = 3.0;
 export const MIN_DATA_POINTS = 10;
+
+// ── 3-Tier Signal Classification ──────────────────────────────────────────────
+// Tier 1 — NOISE:   near-resolution markets (price < 0.05 or > 0.95) where
+//                   tiny absolute moves produce huge Z-scores by math artifact.
+// Tier 2 — SIGNAL:  mid-range markets (0.05–0.95) with |Z| in [3.0, 4.5).
+//                   Genuine unusual activity worth watching.
+// Tier 3 — STRONG:  mid-range markets with |Z| ≥ 4.5.
+//                   High-confidence anomaly — statistically rare.
+export const NEAR_RESOLUTION_LOW  = 0.05;
+export const NEAR_RESOLUTION_HIGH = 0.95;
+export const STRONG_SIGNAL_THRESHOLD = 4.5;
+
+export type SignalTier = 'NOISE' | 'SIGNAL' | 'STRONG';
+
+export function classifySignal(price: number, zScore: number): SignalTier {
+  if (price < NEAR_RESOLUTION_LOW || price > NEAR_RESOLUTION_HIGH) return 'NOISE';
+  return Math.abs(zScore) >= STRONG_SIGNAL_THRESHOLD ? 'STRONG' : 'SIGNAL';
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 export class VolatilityEngine {
   marketMap = new Map<string, string>();
@@ -28,66 +75,86 @@ export class VolatilityEngine {
   onSpike: ((spike: any) => void) | null = null;
   onReady: (() => void) | null = null;
 
+  /** Paginate a single slug sequentially (200ms between pages). Returns local discoveries. */
+  private async discoverSlug(slug: string): Promise<Array<{ assetId: string; marketName: string }>> {
+    const results: Array<{ assetId: string; marketName: string }> = [];
+    let offset = 0;
+    const limit = 100;
+    let hasMore = true;
+
+    while (hasMore) {
+      const url = `https://gamma-api.polymarket.com/events?tag_slug=${slug}&active=true&closed=false&limit=${limit}&offset=${offset}`;
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const events: GammaEvent[] = await response.json();
+
+        if (!Array.isArray(events) || events.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        for (const event of events) {
+          for (const market of event.markets || []) {
+            let tokens: string[] = [];
+            try {
+              tokens = JSON.parse(market.clobTokenIds || "[]");
+            } catch (e: any) {
+              console.warn('Failed to parse clobTokenIds for market:', e.message);
+            }
+            if (tokens.length > 0) {
+              const marketName = `${event.title} - ${market.groupItemTitle || "Yes"}`;
+              results.push({ assetId: tokens[0], marketName });
+            }
+          }
+        }
+
+        offset += limit;
+        if (events.length < limit) {
+          hasMore = false;
+        } else {
+          // Preserve 200ms inter-page delay to avoid rate limiting
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      } catch (e) {
+        console.error(`Failed to fetch market data for slug ${slug}:`, e);
+        hasMore = false;
+      }
+    }
+
+    return results;
+  }
+
   async discoverMarkets() {
     console.log(
       `Scanning Polymarket for active categories: ${TARGET_SLUGS.join(", ")}`
     );
-    
-    const assetIds: string[] = [];
+
+    // Run all slugs concurrently; each slug paginates sequentially with 200ms delay.
+    // allSettled() ensures one failed slug doesn't abort the others.
+    const settled = await Promise.allSettled(
+      TARGET_SLUGS.map(slug => this.discoverSlug(slug))
+    );
+
     const assetIdSet = new Set<string>();
+    const assetIds: string[] = [];
 
-    for (const slug of TARGET_SLUGS) {
-      let offset = 0;
-      const limit = 100;
-      let hasMore = true;
-
-      while (hasMore) {
-        const url = `https://gamma-api.polymarket.com/events?tag_slug=${slug}&active=true&closed=false&limit=${limit}&offset=${offset}`;
-        try {
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-          const events = await response.json();
-
-          if (!Array.isArray(events) || events.length === 0) {
-            hasMore = false;
-            break;
-          }
-
-          for (const event of events) {
-            for (const market of event.markets || []) {
-              let tokens = [];
-              try {
-                tokens = JSON.parse(market.clobTokenIds || "[]");
-              } catch (e: any) {
-                console.warn('Malformed WS message:', e.message);
-              }
-              if (tokens.length > 0) {
-                const assetId = tokens[0];
-                if (!assetIdSet.has(assetId)) {
-                  assetIdSet.add(assetId);
-                  const marketName = `${event.title} - ${market.groupItemTitle || "Yes"}`;
-                  this.marketMap.set(assetId, marketName);
-                  this.priceHistory.set(assetId, []);
-                  this.deltaHistory.set(assetId, []);
-                  assetIds.push(assetId);
-                }
-              }
-            }
-          }
-
-          offset += limit;
-          if (events.length < limit) {
-            hasMore = false;
-          }
-          
-          // Add a small delay to avoid hitting rate limits too hard
-          await new Promise((resolve) => setTimeout(resolve, 200));
-        } catch (e) {
-          console.error(`Failed to fetch market data for slug ${slug}:`, e);
-          hasMore = false;
+    for (const result of settled) {
+      if (result.status === 'rejected') {
+        console.error('Slug discovery failed:', result.reason);
+        continue;
+      }
+      for (const { assetId, marketName } of result.value) {
+        if (!assetIdSet.has(assetId)) {
+          assetIdSet.add(assetId);
+          this.marketMap.set(assetId, marketName);
+          this.priceHistory.set(assetId, []);
+          this.deltaHistory.set(assetId, []);
+          assetIds.push(assetId);
         }
       }
     }
+
     console.log(`Found ${assetIds.length} specific markets to monitor.`);
     return assetIds;
   }
@@ -114,8 +181,10 @@ export class VolatilityEngine {
       if (stdDev > 1e-8) {
         const zScore = (delta - mean) / stdDev;
         if (Math.abs(zScore) >= Z_SCORE_THRESHOLD) {
+          const tier = classifySignal(price, zScore);
           const spike = {
             type: "spike",
+            tier,
             marketName: this.marketMap.get(assetId)!,
             assetId,
             timestamp: new Date().toISOString(),
@@ -127,10 +196,9 @@ export class VolatilityEngine {
             zScore,
             windowSize: deltas.length,
           };
+          const tierIcon = tier === 'STRONG' ? '🔴' : tier === 'SIGNAL' ? '🟡' : '⚪';
           console.log(
-            `🚨 VOLATILITY SPIKE: ${spike.marketName} | ${last.toFixed(
-              3
-            )} -> ${price.toFixed(3)} | Δ: ${delta.toFixed(3)} | Z: ${zScore.toFixed(2)}`
+            `${tierIcon} [${tier}] ${spike.marketName} | ${last.toFixed(3)} -> ${price.toFixed(3)} | Δ: ${delta.toFixed(3)} | Z: ${zScore.toFixed(2)}`
           );
           if (this.onSpike) {
             this.onSpike(spike);
@@ -185,7 +253,7 @@ export class VolatilityEngine {
         
         // Handle array of events (e.g., initial book)
         if (Array.isArray(message)) {
-          for (const event of message) {
+          for (const event of message as ClobTradeMessage[]) {
             if (event.event_type === "last_trade_price") {
               this.analyzeTrade(event.asset_id, parseFloat(event.price));
             }
@@ -193,8 +261,9 @@ export class VolatilityEngine {
         } 
         // Handle single event object (e.g., live price_change)
         else if (message && typeof message === 'object') {
-          if (message.event_type === "last_trade_price") {
-            this.analyzeTrade(message.asset_id, parseFloat(message.price));
+          const event = message as ClobTradeMessage;
+          if (event.event_type === "last_trade_price") {
+            this.analyzeTrade(event.asset_id, parseFloat(event.price));
           }
         }
       } catch (e: any) {

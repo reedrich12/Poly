@@ -31,9 +31,12 @@ app.use(cors({
 
 // --- Database Setup ---
 const db = new Database('spikes.db');
+db.pragma('journal_mode = WAL');
+db.pragma('busy_timeout = 5000');
 db.exec(`
   CREATE TABLE IF NOT EXISTS spike_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tier TEXT NOT NULL DEFAULT 'SIGNAL',
       market_name TEXT NOT NULL,
       asset_id TEXT NOT NULL,
       timestamp TEXT NOT NULL,
@@ -47,14 +50,15 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_spike_timestamp ON spike_events(timestamp);
   CREATE INDEX IF NOT EXISTS idx_spike_market ON spike_events(market_name);
+  CREATE INDEX IF NOT EXISTS idx_spike_tier ON spike_events(tier);
 `);
 
 const insertSpike = db.prepare(`
   INSERT INTO spike_events (
-    market_name, asset_id, timestamp, previous_price, current_price, 
+    tier, market_name, asset_id, timestamp, previous_price, current_price, 
     price_delta, z_score, rolling_mean_delta, rolling_std_delta, window_size
   ) VALUES (
-    @marketName, @assetId, @timestamp, @previousPrice, @currentPrice,
+    @tier, @marketName, @assetId, @timestamp, @previousPrice, @currentPrice,
     @priceDelta, @zScore, @rollingMeanDelta, @rollingStdDelta, @windowSize
   )
 `);
@@ -199,12 +203,15 @@ async function startServer() {
 
 startServer();
 
-process.on('SIGTERM', async () => {
-    console.log('SIGTERM received, shutting down gracefully...');
+async function shutdown(signal: string) {
+    console.log(`${signal} received, shutting down gracefully...`);
     if (engine.ws) engine.ws.close();
     for (const client of sseClients) {
         client.res.end();
     }
     db.close();
     process.exit(0);
-});
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
