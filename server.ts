@@ -8,7 +8,7 @@ import Database from "better-sqlite3";
 import { engine } from "./engine.ts";
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || "3000", 10);
 
 if (process.env.NODE_ENV === 'production') {
     app.use(helmet({
