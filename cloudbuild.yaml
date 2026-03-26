@@ -2,3 +2,6 @@ steps:
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
     args: ['run', 'deploy', 'polymarket-volatility-engine', '--source=.', '--region=us-west1', '--allow-unauthenticated', '--port=8080']
     entrypoint: gcloud
+
+options:
+  logging: CLOUD_LOGGING_ONLY
