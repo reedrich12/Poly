@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { Activity, AlertTriangle, TrendingUp, TrendingDown, Clock, Server, Radio, Filter } from 'lucide-react';
 
 type SignalTier = 'NOISE' | 'SIGNAL' | 'STRONG';
+type TradeSizeBucket = 'normal' | 'large' | 'whale' | 'mega';
 
 interface Spike {
   tier: SignalTier;
@@ -17,6 +18,50 @@ interface Spike {
   priceDelta: number;
   rollingMeanDelta: number;
   zScore: number;
+  // Trade size fields (null when trade context unavailable)
+  side: 'BUY' | 'SELL' | null;
+  tradeSizeShares: number | null;
+  tradeNotionalUsdc: number | null;
+  tradeSizeBucket: TradeSizeBucket | null;
+  priorityScore: number;
+}
+
+// ── Size badge config ──────────────────────────────────────────────────────
+const SIZE_BUCKET_CONFIG: Record<TradeSizeBucket, { label: string; classes: string }> = {
+  normal: { label: 'NORMAL', classes: 'bg-zinc-900 text-zinc-300 border-zinc-700' },
+  large:  { label: 'LARGE',  classes: 'bg-sky-950/60 text-sky-300 border-sky-800' },
+  whale:  { label: 'WHALE',  classes: 'bg-amber-950/50 text-amber-300 border-amber-800' },
+  mega:   { label: 'MEGA',   classes: 'bg-fuchsia-950/40 text-fuchsia-300 border-fuchsia-800' },
+};
+
+function formatUsd(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 10_000)    return `$${(n / 1_000).toFixed(0)}k`;
+  if (n >= 1_000)     return `$${(n / 1_000).toFixed(1)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+function SizeBadge({ spike }: { spike: Spike }) {
+  if (spike.tradeNotionalUsdc == null || spike.tradeSizeBucket == null) return null;
+  const cfg = SIZE_BUCKET_CONFIG[spike.tradeSizeBucket];
+  const sideColor = spike.side === 'BUY' ? 'text-emerald-400' : 'text-rose-400';
+  const tooltip = spike.tradeSizeShares != null
+    ? `${spike.tradeSizeShares.toFixed(1)} shares`
+    : '';
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {spike.side != null && (
+        <span className={`text-xs font-semibold ${sideColor}`}>{spike.side}</span>
+      )}
+      <span
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-mono ${cfg.classes}`}
+        title={tooltip}
+      >
+        {formatUsd(spike.tradeNotionalUsdc)}
+        <span className="text-[10px] opacity-70">{cfg.label}</span>
+      </span>
+    </span>
+  );
 }
 
 // ── Tier badge config ──────────────────────────────────────────────────────
@@ -173,6 +218,7 @@ export default function App() {
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-2 flex-wrap">
                           <TierBadge tier={spike.tier} />
+                          <SizeBadge spike={spike} />
                           <span className="font-medium text-white text-sm">{spike.marketName}</span>
                         </div>
                         <div className="flex items-center gap-4 text-sm text-zinc-400">
@@ -189,11 +235,11 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3 bg-zinc-950 px-4 py-2 rounded-lg border border-zinc-800 shrink-0">
-                        <span className="text-zinc-400 font-mono text-sm">{spike.previousPrice.toFixed(3)}¢</span>
+                        <span className="text-zinc-400 font-mono text-sm">{(spike.previousPrice * 100).toFixed(1)}¢</span>
                         <span className="text-zinc-600">→</span>
-                        <span className="text-white font-mono font-semibold">{spike.currentPrice.toFixed(3)}¢</span>
+                        <span className="text-white font-mono font-semibold">{(spike.currentPrice * 100).toFixed(1)}¢</span>
                         <span className={`text-xs ml-1 font-mono ${spike.priceDelta >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                          {spike.priceDelta > 0 ? '+' : ''}{spike.priceDelta.toFixed(3)}
+                          {spike.priceDelta > 0 ? '+' : ''}{(spike.priceDelta * 100).toFixed(1)}¢
                         </span>
                       </div>
                     </div>

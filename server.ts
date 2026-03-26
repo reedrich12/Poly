@@ -53,13 +53,33 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_spike_tier ON spike_events(tier);
 `);
 
+// Additive schema migration — safe to run on existing databases
+const ensureColumn = (name: string, ddl: string) => {
+  const cols = db.prepare(`PRAGMA table_info(spike_events)`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === name)) {
+    db.exec(`ALTER TABLE spike_events ADD COLUMN ${name} ${ddl}`);
+  }
+};
+ensureColumn('trade_timestamp_ms', 'INTEGER');
+ensureColumn('side', 'TEXT');
+ensureColumn('trade_size_shares', 'REAL');
+ensureColumn('trade_notional_usdc', 'REAL');
+ensureColumn('trade_size_bucket', 'TEXT');
+ensureColumn('priority_score', 'REAL');
+
 const insertSpike = db.prepare(`
   INSERT INTO spike_events (
-    tier, market_name, asset_id, timestamp, previous_price, current_price, 
-    price_delta, z_score, rolling_mean_delta, rolling_std_delta, window_size
+    tier, market_name, asset_id, timestamp,
+    trade_timestamp_ms, side,
+    previous_price, current_price,
+    price_delta, z_score, rolling_mean_delta, rolling_std_delta, window_size,
+    trade_size_shares, trade_notional_usdc, trade_size_bucket, priority_score
   ) VALUES (
-    @tier, @marketName, @assetId, @timestamp, @previousPrice, @currentPrice,
-    @priceDelta, @zScore, @rollingMeanDelta, @rollingStdDelta, @windowSize
+    @tier, @marketName, @assetId, @timestamp,
+    @tradeTimestampMs, @side,
+    @previousPrice, @currentPrice,
+    @priceDelta, @zScore, @rollingMeanDelta, @rollingStdDelta, @windowSize,
+    @tradeSizeShares, @tradeNotionalUsdc, @tradeSizeBucket, @priorityScore
   )
 `);
 
